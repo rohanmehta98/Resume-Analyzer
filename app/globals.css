@@ -198,3 +198,19 @@
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Respect users who prefer reduced motion — neutralize entrance animations,
+   hover transforms, and smooth scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  html {
+    scroll-behavior: auto !important;
+  }
+}

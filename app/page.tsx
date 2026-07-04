@@ -15,7 +15,7 @@ export default function Home() {
             aria-label="ResumeIQ — back to home"
             className="group flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6 motion-reduce:transition-none motion-reduce:group-hover:scale-100 motion-reduce:group-hover:rotate-0">
               <FileSearch className="h-4 w-4" />
             </span>
             <span className="text-base font-semibold tracking-tight transition-colors group-hover:text-primary">ResumeIQ</span>

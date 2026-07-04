@@ -48,6 +48,8 @@ export function UploadForm({ loading, onAnalyze }: { loading: boolean; onAnalyze
   const ready = mode === "upload" ? Boolean(file) : pastedText.trim().length > 40;
 
   function tryDemo() {
+    const hasContent = mode === "paste" ? pastedText.trim().length > 0 : Boolean(file);
+    if (hasContent && !window.confirm("Replace your current input with a sample resume?")) return;
     setMode("paste");
     setPastedText(SAMPLE_RESUME);
     setTargetRole(SAMPLE_ROLE);

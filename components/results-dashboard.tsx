@@ -30,12 +30,15 @@ export function ResultsDashboard({ data }: { data: AnalyzeResponse }) {
             </div>
             <p className="max-w-prose text-sm text-muted-foreground">{a.summary}</p>
             {a.potentialScore > a.overallScore && (
-              <div className="inline-flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-1.5 text-sm">
-                <TrendingUp className="h-4 w-4 shrink-0 text-success" />
+              <div className="inline-flex items-start gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-1.5 text-sm">
+                <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-success" />
                 <span className="text-muted-foreground">
-                  Reach <span className="font-bold text-success">{a.potentialScore}</span>
-                  <span className="font-semibold text-success"> (+{a.potentialScore - a.overallScore})</span> by applying the
-                  fixes below
+                  Reach <span className="font-bold text-emerald-700 dark:text-success">{a.potentialScore}</span>
+                  <span className="font-semibold text-emerald-700 dark:text-success">
+                    {" "}
+                    (+{a.potentialScore - a.overallScore})
+                  </span>{" "}
+                  by applying the fixes below
                 </span>
               </div>
             )}
