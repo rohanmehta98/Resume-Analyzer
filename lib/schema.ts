@@ -46,7 +46,9 @@ export const analysisSchema = z.object({
   recommendations: z
     .array(
       z.object({
-        priority: z.enum(["High", "Medium", "Low"]),
+        // Kept as a plain string (not a strict enum) so an occasional off-list
+        // value from the model never fails validation; normalized in code.
+        priority: z.string().describe("High, Medium, or Low."),
         title: z.string(),
         detail: z.string().describe("A specific, actionable fix referencing this resume's content."),
       })

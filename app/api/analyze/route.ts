@@ -60,19 +60,11 @@ export async function POST(req: Request) {
     const signals = computeSignals(resumeText);
     let ats = computeAtsChecks(signals);
 
-    // 2. Qualitative analysis (AI, schema-constrained).
-    //    strictJsonSchema:false so Groq tolerates schema keywords it can't
-    //    constrain-decode; ranges are enforced by normalizeAnalysis() below.
+    // 2. Qualitative analysis (AI, schema-constrained). Reasoning models
+    //    occasionally emit a non-conforming object, so retry a couple of times
+    //    before surfacing an error; scores/priority are normalized afterwards.
     const prompt = buildAnalysisPrompt({ resumeText, signals, targetRole, jobDescription });
-    const { object } = await generateObject({
-      model,
-      schema: analysisSchema,
-      system: ANALYSIS_SYSTEM,
-      prompt,
-      temperature: 0.3,
-      providerOptions: { groq: { strictJsonSchema: false } },
-    });
-    const analysis = clampAnalysis(object);
+    const analysis = clampAnalysis(await generateAnalysis(prompt));
 
     // 3. Fold keyword coverage into ATS when a JD was provided.
     const hasJobDescription = Boolean(jobDescription && jobDescription.trim());
@@ -99,6 +91,37 @@ export async function POST(req: Request) {
   } catch (e) {
     return handleError(e);
   }
+}
+
+/** Run the structured analysis, retrying when the model returns a non-conforming
+ *  object (intermittent with reasoning models). Fails fast on auth/rate errors. */
+async function generateAnalysis(prompt: string) {
+  const MAX_ATTEMPTS = 3;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { object } = await generateObject({
+        model,
+        schema: analysisSchema,
+        system: ANALYSIS_SYSTEM,
+        prompt,
+        temperature: 0.2, // lower = more consistent scores across runs
+        providerOptions: { groq: { strictJsonSchema: false } },
+      });
+      return object;
+    } catch (e) {
+      lastErr = e;
+      if (attempt === MAX_ATTEMPTS || !isSchemaError(e)) throw e;
+    }
+  }
+  throw lastErr;
+}
+
+function isSchemaError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const name = String((e as { name?: string }).name || "");
+  const msg = String((e as { message?: string }).message || "");
+  return /NoObjectGenerated/i.test(name) || /validate JSON|did not match schema/i.test(msg);
 }
 
 function handleError(e: unknown) {

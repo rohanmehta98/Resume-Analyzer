@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, RotateCcw, AlertCircle, Download } from "lucide-react";
+import { Loader2, RotateCcw, AlertCircle, Download, Sparkles, ShieldCheck, Target, MessagesSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { UploadForm, type AnalyzeInput } from "@/components/upload-form";
@@ -87,20 +87,57 @@ export function Analyzer() {
       )}
 
       {!data ? (
-        <div className="mx-auto max-w-3xl">
-          <div className="mb-8 text-center">
-            <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">
-              Analyze your resume like a recruiter would
-            </h1>
-            <p className="mx-auto mt-3 max-w-xl text-pretty text-muted-foreground">
-              Upload your resume to get an ATS score, keyword match, section-by-section grades, and specific rewrites —
-              in seconds. Nothing is stored.
+        <div className="relative">
+          {/* decorative glow */}
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-28 -z-10 flex justify-center overflow-hidden">
+            <div className="h-72 w-[46rem] max-w-[92vw] rounded-full bg-primary/20 blur-[100px] dark:bg-primary/25" />
+          </div>
+
+          <div className="mx-auto max-w-3xl">
+            <div className="mb-8 text-center duration-700 animate-in fade-in-0 slide-in-from-bottom-3">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border bg-card/60 px-3.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                AI-powered resume analysis
+                <span aria-hidden className="text-border">·</span>
+                Free &amp; private
+              </div>
+              <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">
+                Let&apos;s analyze the next candidate.
+              </h1>
+              <p className="mx-auto mt-4 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
+                Upload a resume for an instant, recruiter-grade breakdown — ATS score, keyword match, section grades, and
+                the exact rewrites that get interviews.
+              </p>
+            </div>
+
+            <div className="duration-700 animate-in fade-in-0 slide-in-from-bottom-4 [animation-delay:120ms] [animation-fill-mode:both]">
+              <UploadForm loading={loading} onAnalyze={handleAnalyze} />
+            </div>
+
+            <div className="mt-8 grid grid-cols-2 gap-3 duration-700 animate-in fade-in-0 [animation-delay:260ms] [animation-fill-mode:both] sm:grid-cols-4">
+              {[
+                { icon: ShieldCheck, label: "ATS score" },
+                { icon: Target, label: "Keyword match" },
+                { icon: Sparkles, label: "Bullet rewrites" },
+                { icon: MessagesSquare, label: "AI chat coach" },
+              ].map((f) => (
+                <div
+                  key={f.label}
+                  className="flex flex-col items-center gap-2 rounded-xl border bg-card/50 p-4 text-center transition-colors hover:border-primary/40 hover:bg-accent/40"
+                >
+                  <f.icon className="h-5 w-5 text-primary" />
+                  <span className="text-xs font-medium text-muted-foreground">{f.label}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-6 text-center text-xs text-muted-foreground">
+              No sign-up · Processed in memory · Nothing is stored
             </p>
           </div>
-          <UploadForm loading={loading} onAnalyze={handleAnalyze} />
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-6 duration-500 animate-in fade-in-0">
           <div className="flex items-center justify-between print:hidden">
             <p className="text-sm text-muted-foreground">
               Analysis of <span className="font-medium text-foreground">{data.meta.fileName}</span>

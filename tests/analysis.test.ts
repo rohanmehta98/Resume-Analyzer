@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampAnalysis } from "@/lib/analysis";
+import { clampAnalysis, normalizePriority } from "@/lib/analysis";
 import type { Analysis } from "@/lib/schema";
 
 function make(overrides: Partial<Analysis> = {}): Analysis {
@@ -64,5 +64,31 @@ describe("clampAnalysis", () => {
     const a = clampAnalysis(make({ candidateName: "Bob", strengths: ["x", "y"] }));
     expect(a.candidateName).toBe("Bob");
     expect(a.strengths).toEqual(["x", "y"]);
+  });
+
+  it("normalizes recommendation priorities to High/Medium/Low", () => {
+    const a = clampAnalysis(
+      make({
+        recommendations: [
+          { priority: "critical", title: "t", detail: "d" },
+          { priority: "medium", title: "t", detail: "d" },
+          { priority: "whatever", title: "t", detail: "d" },
+        ],
+      })
+    );
+    expect(a.recommendations.map((r) => r.priority)).toEqual(["High", "Medium", "Medium"]);
+  });
+});
+
+describe("normalizePriority", () => {
+  it("maps common variants", () => {
+    expect(normalizePriority("High")).toBe("High");
+    expect(normalizePriority("high")).toBe("High");
+    expect(normalizePriority("Critical")).toBe("High");
+    expect(normalizePriority("urgent")).toBe("High");
+    expect(normalizePriority("Low")).toBe("Low");
+    expect(normalizePriority("Medium")).toBe("Medium");
+    expect(normalizePriority("")).toBe("Medium");
+    expect(normalizePriority("something odd")).toBe("Medium");
   });
 });

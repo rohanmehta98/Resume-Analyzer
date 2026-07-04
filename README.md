@@ -48,7 +48,7 @@ npm test           # vitest (deterministic core: signals, extract, format, clamp
 | Variable       | Required | Default                             | Notes |
 | -------------- | -------- | ----------------------------------- | ----- |
 | `GROQ_API_KEY` | yes      | —                                   | Free key: https://console.groq.com/keys |
-| `GROQ_MODEL`   | no       | `openai/gpt-oss-120b`               | **Must support structured output (json_schema).** See `.env.example` (faster alt: `meta-llama/llama-4-scout-17b-16e-instruct`). Do not use `llama-3.3-70b-versatile`. |
+| `GROQ_MODEL`   | no       | `meta-llama/llama-4-scout-17b-16e-instruct` | Fast (~2.5s) + reliable. **Must support structured output (json_schema).** For deeper (but slower) analysis try `openai/gpt-oss-120b`. Do not use `llama-3.3-70b-versatile`. |
 
 ## Project structure
 

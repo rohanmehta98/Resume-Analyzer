@@ -9,7 +9,7 @@ import { groq } from "@ai-sdk/groq";
  * so `generateObject` fails with it. If you change GROQ_MODEL, pick a model with
  * "Object Generation" support (see .env.example).
  */
-export const MODEL_ID = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+export const MODEL_ID = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
 
 export const model = groq(MODEL_ID);
 

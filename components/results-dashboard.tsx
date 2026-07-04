@@ -354,10 +354,10 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function priorityRank(p: "High" | "Medium" | "Low") {
+function priorityRank(p: string) {
   return p === "High" ? 0 : p === "Medium" ? 1 : 2;
 }
-function priorityBorder(p: "High" | "Medium" | "Low") {
+function priorityBorder(p: string) {
   return p === "High" ? "border-l-destructive" : p === "Medium" ? "border-l-warning" : "border-l-success";
 }
 

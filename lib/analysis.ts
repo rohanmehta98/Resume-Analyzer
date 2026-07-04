@@ -17,5 +17,14 @@ export function clampAnalysis(a: Analysis): Analysis {
       clarity: { ...s.clarity, score: clamp(s.clarity.score) },
       education: { ...s.education, score: clamp(s.education.score) },
     },
+    recommendations: a.recommendations.map((r) => ({ ...r, priority: normalizePriority(r.priority) })),
   };
+}
+
+/** Coerce any model priority value to one of High | Medium | Low. */
+export function normalizePriority(p: string): "High" | "Medium" | "Low" {
+  const s = String(p || "").toLowerCase();
+  if (s.startsWith("h") || s.includes("critical") || s.includes("urgent")) return "High";
+  if (s.startsWith("l")) return "Low";
+  return "Medium";
 }
