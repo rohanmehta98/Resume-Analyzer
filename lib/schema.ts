@@ -30,6 +30,7 @@ export const analysisSchema = z.object({
   overallScore: score.describe("Holistic 0-100. Reserve 85+ for genuinely strong, quantified, targeted resumes; most resumes are 55-75."),
   summary: z.string().describe("2-3 sentence recruiter's-eye verdict, specific to this resume."),
   matchScore: score.describe("0-100 fit against the job description if provided, else fit against typical expectations for the target role."),
+  potentialScore: score.describe("Realistic overall score this resume could reach if the top recommendations are applied. Must be >= overallScore and honest (rarely more than ~20 points higher)."),
   sectionScores: z.object({
     experience: sectionScore,
     skills: sectionScore,

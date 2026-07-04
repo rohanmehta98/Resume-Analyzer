@@ -69,6 +69,7 @@ Output quality bar:
 - Every strength, weakness, and recommendation must reference specific content from THIS resume — no generic advice that could apply to any resume.
 - recommendations: order by real impact; the #1 item should be the single change that most raises this candidate's chances.
 - bulletRewrites: pick 3-5 of the WEAKEST real bullets and rewrite them dramatically stronger — quantified, action-led, outcome-focused. "original" must be copied verbatim from the resume; if the resume genuinely has no weak bullets, rewrite the least-quantified ones.
+- potentialScore: the realistic overallScore this resume would reach if the top 2-3 recommendations were applied. Motivating but honest — always ≥ overallScore, rarely more than ~20 points above it.
 - interviewQuestions: the pointed questions a sharp interviewer would actually ask THIS candidate based on their claims and gaps.
 - redFlags: only real concerns (unexplained gaps, job-hopping, inconsistencies, missing must-haves) — empty array if none. Do not invent.`;
 }

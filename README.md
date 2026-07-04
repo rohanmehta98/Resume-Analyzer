@@ -5,11 +5,13 @@ A modern, production-ready resume analyzer built with **Next.js 16 (App Router)*
 Upload a resume (PDF/DOCX/TXT) or paste text to get:
 
 - **Overall + ATS + job-match scores** with a section-by-section breakdown
+- **Potential score** — the score you'd reach after applying the top fixes
 - **Keyword matching** against a pasted job description
 - **Specific bullet rewrites** (before → after) and prioritized recommendations
 - **Likely interview questions** and recruiter **red flags**
 - A **streaming chat assistant** grounded in the actual resume text
 - **Download the report as a PDF** (print-optimized)
+- **"Try a sample"** one-click demo — no resume needed
 
 Files are processed **in memory only** — nothing is stored.
 

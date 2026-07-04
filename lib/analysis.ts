@@ -6,10 +6,13 @@ import type { Analysis } from "./schema";
 export function clampAnalysis(a: Analysis): Analysis {
   const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(Number.isFinite(n) ? n : 0)));
   const s = a.sectionScores;
+  const overallScore = clamp(a.overallScore);
   return {
     ...a,
-    overallScore: clamp(a.overallScore),
+    overallScore,
     matchScore: clamp(a.matchScore),
+    // Potential can never be below the current score.
+    potentialScore: Math.max(overallScore, clamp(a.potentialScore)),
     sectionScores: {
       experience: { ...s.experience, score: clamp(s.experience.score) },
       skills: { ...s.skills, score: clamp(s.skills.score) },
