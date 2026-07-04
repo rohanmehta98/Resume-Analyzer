@@ -10,6 +10,7 @@ function make(overrides: Partial<Analysis> = {}): Analysis {
     overallScore: 70,
     summary: "ok",
     matchScore: 70,
+    potentialScore: 82,
     sectionScores: {
       experience: { ...section },
       skills: { ...section },
@@ -39,6 +40,11 @@ describe("clampAnalysis", () => {
     const a = clampAnalysis(make({ overallScore: 73.6 }));
     expect(a.overallScore).toBe(74);
     expect(Number.isInteger(a.overallScore)).toBe(true);
+  });
+
+  it("never lets potentialScore drop below overallScore", () => {
+    expect(clampAnalysis(make({ overallScore: 80, potentialScore: 60 })).potentialScore).toBe(80);
+    expect(clampAnalysis(make({ overallScore: 70, potentialScore: 88 })).potentialScore).toBe(88);
   });
 
   it("clamps every section score", () => {

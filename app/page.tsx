@@ -13,12 +13,12 @@ export default function Home() {
           <a
             href="/"
             aria-label="ResumeIQ — back to home"
-            className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="group flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
               <FileSearch className="h-4 w-4" />
             </span>
-            <span className="text-base font-semibold tracking-tight">ResumeIQ</span>
+            <span className="text-base font-semibold tracking-tight transition-colors group-hover:text-primary">ResumeIQ</span>
           </a>
           <ThemeToggle />
         </div>

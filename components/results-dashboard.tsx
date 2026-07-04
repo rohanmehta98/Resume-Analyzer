@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, X, Copy, AlertTriangle, ArrowRight } from "lucide-react";
+import { Check, X, Copy, AlertTriangle, ArrowRight, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +29,16 @@ export function ResultsDashboard({ data }: { data: AnalyzeResponse }) {
               <p className="font-medium text-primary">{a.detectedRole}</p>
             </div>
             <p className="max-w-prose text-sm text-muted-foreground">{a.summary}</p>
+            {a.potentialScore > a.overallScore && (
+              <div className="inline-flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-1.5 text-sm">
+                <TrendingUp className="h-4 w-4 shrink-0 text-success" />
+                <span className="text-muted-foreground">
+                  Reach <span className="font-bold text-success">{a.potentialScore}</span>
+                  <span className="font-semibold text-success"> (+{a.potentialScore - a.overallScore})</span> by applying the
+                  fixes below
+                </span>
+              </div>
+            )}
           </div>
           <ScoreRing score={a.overallScore} caption="Overall" size={148} />
         </CardContent>

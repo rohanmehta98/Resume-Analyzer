@@ -12,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { MAX_FILE_BYTES, MAX_FILE_MB } from "@/lib/constants";
+import { SAMPLE_RESUME, SAMPLE_ROLE } from "@/lib/sample-resume";
 
 export interface AnalyzeInput {
   file: File | null;
@@ -45,6 +46,14 @@ export function UploadForm({ loading, onAnalyze }: { loading: boolean; onAnalyze
   }
 
   const ready = mode === "upload" ? Boolean(file) : pastedText.trim().length > 40;
+
+  function tryDemo() {
+    setMode("paste");
+    setPastedText(SAMPLE_RESUME);
+    setTargetRole(SAMPLE_ROLE);
+    setFile(null);
+    onAnalyze({ file: null, pastedText: SAMPLE_RESUME, targetRole: SAMPLE_ROLE, jobDescription: "", mode: "paste" });
+  }
 
   return (
     <Card className="mx-auto w-full max-w-2xl">
@@ -165,6 +174,15 @@ export function UploadForm({ loading, onAnalyze }: { loading: boolean; onAnalyze
         >
           {loading ? "Analyzing…" : "Analyze resume"}
         </Button>
+
+        <button
+          type="button"
+          onClick={tryDemo}
+          disabled={loading}
+          className="w-full text-center text-sm text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline disabled:opacity-50"
+        >
+          No resume handy? Try a sample →
+        </button>
       </CardContent>
     </Card>
   );
