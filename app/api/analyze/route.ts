@@ -9,15 +9,22 @@ import { analysisSchema } from "@/lib/schema";
 import { clampAnalysis } from "@/lib/analysis";
 import { ANALYSIS_SYSTEM, buildAnalysisPrompt } from "@/lib/prompt";
 import { verdictFromScore } from "@/lib/format";
-import { rateLimit, getClientIp } from "@/lib/rate-limit";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import type { AnalyzeResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Hard ceiling on each AI attempt so a slow or stuck model can never hang the
+// request until the platform kills the function at `maxDuration`. Two attempts ×
+// this budget stays comfortably under 60s, leaving headroom for extraction.
+const AI_ATTEMPT_TIMEOUT_MS = 24_000;
+const AI_MAX_ATTEMPTS = 2;
+const AI_MAX_OUTPUT_TOKENS = 4000;
+
 export async function POST(req: Request) {
   try {
-    const rl = rateLimit(`analyze:${getClientIp(req)}`, 15, 60_000);
+    const rl = await checkRateLimit(`analyze:${getClientIp(req)}`, { limit: 15, windowMs: 60_000 });
     if (!rl.ok) {
       return NextResponse.json(
         { error: "Too many requests. Please wait a moment and try again." },
@@ -93,12 +100,12 @@ export async function POST(req: Request) {
   }
 }
 
-/** Run the structured analysis, retrying when the model returns a non-conforming
- *  object (intermittent with reasoning models). Fails fast on auth/rate errors. */
+/** Run the structured analysis under a strict time budget. Each attempt is
+ *  capped by an abort timeout so a slow model can't hang the request; retries
+ *  only cover the rare schema drift. Fails fast on auth/rate/timeout errors. */
 async function generateAnalysis(prompt: string) {
-  const MAX_ATTEMPTS = 3;
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= AI_MAX_ATTEMPTS; attempt++) {
     try {
       const { object } = await generateObject({
         model,
@@ -106,12 +113,22 @@ async function generateAnalysis(prompt: string) {
         system: ANALYSIS_SYSTEM,
         prompt,
         temperature: 0.2, // lower = more consistent scores across runs
-        providerOptions: { groq: { strictJsonSchema: false } },
+        maxOutputTokens: AI_MAX_OUTPUT_TOKENS, // bound generation so a verbose resume can't run away
+        maxRetries: 1, // one transient-error retry, inside the per-attempt timeout below
+        abortSignal: AbortSignal.timeout(AI_ATTEMPT_TIMEOUT_MS),
+        // Constrained decoding (strict json_schema) makes Groq guarantee output
+        // that matches the schema, so we don't burn slow retries on the model
+        // drifting off-shape. The schema deliberately avoids the min/max/minItems
+        // keywords Groq's strict mode rejects (see lib/schema.ts).
+        providerOptions: { groq: { strictJsonSchema: true } },
       });
       return object;
     } catch (e) {
       lastErr = e;
-      if (attempt === MAX_ATTEMPTS || !isSchemaError(e)) throw e;
+      // Retry only on schema drift (rare with strict decoding). Auth, rate-limit,
+      // and timeout errors fail fast so the user gets a clear message quickly
+      // instead of waiting out the whole budget.
+      if (attempt === AI_MAX_ATTEMPTS || !isSchemaError(e)) throw e;
     }
   }
   throw lastErr;
@@ -119,14 +136,31 @@ async function generateAnalysis(prompt: string) {
 
 function isSchemaError(e: unknown): boolean {
   if (!e || typeof e !== "object") return false;
+  if (isAbortError(e)) return false; // a timeout is not schema drift — don't retry it
   const name = String((e as { name?: string }).name || "");
   const msg = String((e as { message?: string }).message || "");
   return /NoObjectGenerated/i.test(name) || /validate JSON|did not match schema/i.test(msg);
 }
 
+/** True for abort/timeout errors (AbortSignal.timeout throws a TimeoutError). */
+function isAbortError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const o = e as { name?: string; message?: string; cause?: { name?: string } };
+  const blob = `${o.name ?? ""} ${o.message ?? ""} ${o.cause?.name ?? ""}`;
+  return /abort|timeout|timed ?out/i.test(blob);
+}
+
 function handleError(e: unknown) {
   if (e instanceof ExtractionError) {
     return err(e.message, e.status);
+  }
+  // A model call that blew past its per-attempt budget was aborted — return a
+  // clear timeout instead of a generic 500 (or, before the abort existed, a hang).
+  if (isAbortError(e)) {
+    return err(
+      "The analysis took too long and was stopped. Please try again — a shorter resume, or switching to the default (faster) model, usually fixes this.",
+      504
+    );
   }
   // AI SDK wraps retryable provider errors in a RetryError (no top-level
   // statusCode) — dig into lastError so 401/429 are mapped correctly.
@@ -135,7 +169,9 @@ function handleError(e: unknown) {
   if (status === 429) return err("The AI service is rate-limited right now. Please wait a moment and retry.", 429);
   if (status === 413) return err("That request was too large. Please upload a smaller file.", 413);
 
-  console.error("[analyze] error:", e);
+  // Log only a safe summary — the raw AI SDK error can serialize the provider
+  // request body, which contains the candidate's resume text (PII).
+  console.error("[analyze] error:", e instanceof Error ? `${e.name}: ${e.message}` : String(e), "status=", status);
   return err("Something went wrong while analyzing. Please try again.", 500);
 }
 

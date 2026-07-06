@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { rateLimit, getClientIp, __resetRateLimit } from "@/lib/rate-limit";
+import {
+  rateLimit,
+  checkRateLimit,
+  hasDurableRateLimit,
+  getClientIp,
+  __resetRateLimit,
+} from "@/lib/rate-limit";
 
 describe("rateLimit", () => {
   beforeEach(() => __resetRateLimit());
@@ -33,6 +39,23 @@ describe("rateLimit", () => {
     vi.advanceTimersByTime(1001); // window elapses
     const after = rateLimit("k", 2, 1000);
     expect(after.ok).toBe(true); // allowed again, count restarted
+  });
+});
+
+describe("checkRateLimit (no store configured → in-memory fallback)", () => {
+  beforeEach(() => __resetRateLimit());
+
+  it("reports no durable store in this environment", () => {
+    expect(hasDurableRateLimit()).toBe(false);
+  });
+
+  it("allows up to the limit then blocks, like the in-memory limiter", async () => {
+    for (let i = 0; i < 3; i++) {
+      expect((await checkRateLimit("c", { limit: 3, windowMs: 60_000 })).ok).toBe(true);
+    }
+    const blocked = await checkRateLimit("c", { limit: 3, windowMs: 60_000 });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.retryAfterSec).toBeGreaterThan(0);
   });
 });
 
