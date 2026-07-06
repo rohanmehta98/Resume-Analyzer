@@ -17,3 +17,6 @@ export const MAX_ROLE_CHARS = 200;
 /** Chat guards. */
 export const MAX_CHAT_CONTEXT_CHARS = 1_000;
 export const MAX_CHAT_MESSAGES = 40;
+/** Hard cap on the combined text of the conversation sent to the model, so a
+ *  single request can't force a maximum-size (maximum-cost) generation. */
+export const MAX_CHAT_INPUT_CHARS = 12_000;

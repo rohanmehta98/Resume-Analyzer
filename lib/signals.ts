@@ -73,7 +73,10 @@ export function computeSignals(input: string): Signals {
   const words = text.split(/\s+/).filter(Boolean);
   const wordCount = words.length;
 
-  const hasEmail = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(text);
+  // Bounded quantifiers keep this linear: an unbounded `+` before `@` backtracks
+  // O(n^2) on a long token with no `@` (a one-line paste DoS). Real local parts
+  // are <=64 chars and domains <=255, so bounding costs no real matches.
+  const hasEmail = /[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,255}\.[a-z]{2,24}/i.test(text);
   const hasPhone = /(\+?\d[\d\s().-]{7,}\d)/.test(text);
   const hasLinkedIn = /linkedin\.com\//i.test(text);
   const hasGitHub = /github\.com\//i.test(text);

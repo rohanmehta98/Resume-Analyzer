@@ -16,7 +16,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
+  // Prefer an explicit site URL; fall back to Vercel's stable production domain
+  // so OG/canonical URLs are correct in prod even if NEXT_PUBLIC_SITE_URL is unset.
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : "http://localhost:3000")
+  ),
   applicationName: "ResumeIQ",
   title: {
     default: "ResumeIQ — AI Resume Analyzer",

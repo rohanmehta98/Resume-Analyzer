@@ -1,11 +1,20 @@
 /**
- * Minimal in-memory fixed-window rate limiter.
+ * Rate limiting for the public AI routes.
  *
- * IMPORTANT: state lives in the function instance's memory, so on serverless it
- * is best-effort (per-instance, resets on cold start). It blunts casual abuse
- * of the public AI routes but is NOT a substitute for a shared limiter. For real
- * production use Vercel Firewall rate rules or @upstash/ratelimit (see README).
+ * `checkRateLimit` is the entry point routes should call. When an Upstash Redis /
+ * Vercel KV store is configured (via env vars) it uses a durable, cross-instance
+ * sliding-window limiter that survives instance churn and IP-distributed traffic.
+ * When no store is configured (local dev, or before you provision one) it falls
+ * back to the in-memory `rateLimit` below — best-effort, per-instance — so the app
+ * still works everywhere. A Redis outage also degrades to in-memory rather than
+ * failing the request.
+ *
+ * The in-memory limiter is intentionally NOT a substitute for a shared one; for
+ * production also add a Vercel Firewall rate rule + a hard Groq spend cap.
  */
+
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
 
 interface Bucket {
   count: number;
@@ -48,6 +57,62 @@ function sweep(now: number) {
       if (--excess <= 0) break;
     }
   }
+}
+
+/* -------- durable (cross-instance) limiter, used when a store is configured -------- */
+
+/** Upstash/KV REST client, or null when no store env vars are present. Supports
+ *  both Upstash-native and Vercel KV-compatible variable names. */
+function makeRedis(): Redis | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
+
+const redis = makeRedis();
+const limiters = new Map<string, Ratelimit>();
+
+function getLimiter(limit: number, windowSec: number): Ratelimit | null {
+  if (!redis) return null;
+  const cacheKey = `${limit}:${windowSec}`;
+  let rl = limiters.get(cacheKey);
+  if (!rl) {
+    rl = new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(limit, `${windowSec} s`),
+      prefix: "ratelimit",
+      analytics: false,
+    });
+    limiters.set(cacheKey, rl);
+  }
+  return rl;
+}
+
+/**
+ * Rate-limit `key`. Uses the durable store when configured, otherwise the
+ * in-memory limiter. Never throws: a store error degrades to in-memory so a
+ * Redis hiccup can't take the app down.
+ */
+export async function checkRateLimit(
+  key: string,
+  { limit = 20, windowMs = 60_000 }: { limit?: number; windowMs?: number } = {}
+): Promise<RateLimitResult> {
+  const windowSec = Math.max(1, Math.round(windowMs / 1000));
+  const limiter = getLimiter(limit, windowSec);
+  if (!limiter) return rateLimit(key, limit, windowMs);
+  try {
+    const res = await limiter.limit(key);
+    if (res.success) return { ok: true, retryAfterSec: 0 };
+    return { ok: false, retryAfterSec: Math.max(1, Math.ceil((res.reset - Date.now()) / 1000)) };
+  } catch {
+    return rateLimit(key, limit, windowMs);
+  }
+}
+
+/** True when a durable store is wired up (surfaced by /api/health for ops). */
+export function hasDurableRateLimit(): boolean {
+  return redis !== null;
 }
 
 /**
