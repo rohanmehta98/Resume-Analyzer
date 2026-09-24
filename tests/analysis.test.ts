@@ -1,100 +1,234 @@
 import { describe, it, expect } from "vitest";
-import { clampAnalysis, normalizePriority } from "@/lib/analysis";
-import type { Analysis } from "@/lib/schema";
+import {
+  buildAnalysis,
+  clamp,
+  clarityCeiling,
+  impactCeiling,
+  normalizeImportance,
+  normalizePriority,
+  normalizeStatus,
+  requirementCoverage,
+  weightedScore,
+} from "@/lib/analysis";
+import { computeSignals } from "@/lib/signals";
+import { CAREER_PROFILES } from "@/lib/careers";
+import type { Assessment, Content } from "@/lib/schema";
 
-function make(overrides: Partial<Analysis> = {}): Analysis {
+const RESUME = [
+  "Jane Doe",
+  "Senior Software Engineer",
+  "jane@example.com | (555) 123-4567",
+  "EXPERIENCE",
+  "Acme Corp - Senior Software Engineer (2020 - Present)",
+  "- Led migration of a monolith to microservices, reducing p95 latency by 40%",
+  "- Built a CI/CD pipeline with Docker and Kubernetes that cut deploy time from 2 hours to 15 minutes",
+  "- Responsible for the payments service",
+  "SKILLS",
+  "TypeScript, Node.js, React, AWS, PostgreSQL",
+  "EDUCATION",
+  "B.S. Computer Science, State University",
+].join("\n");
+
+function assessment(overrides: Partial<Assessment> = {}): Assessment {
   const section = { score: 70, insight: "x" };
   return {
-    candidateName: "Jane",
-    detectedRole: "Engineer",
+    candidateName: "Jane Doe",
+    currentTitle: "Senior Software Engineer",
+    detectedRole: "Senior Software Engineer",
     overallScore: 70,
     summary: "ok",
     matchScore: 70,
     potentialScore: 82,
     sectionScores: {
       experience: { ...section },
-      skills: { ...section },
       impact: { ...section },
+      skills: { ...section },
+      relevance: { ...section },
       clarity: { ...section },
       education: { ...section },
     },
     strengths: ["a"],
     weaknesses: ["b"],
     keywords: { matched: [], missing: [] },
+    requirements: [],
     recommendations: [],
-    bulletRewrites: [],
-    interviewQuestions: [],
     redFlags: [],
     ...overrides,
   };
 }
 
-describe("clampAnalysis", () => {
-  it("clamps out-of-range scores into 0-100", () => {
-    const a = clampAnalysis(make({ overallScore: 150, matchScore: -20 }));
-    expect(a.overallScore).toBe(100);
-    expect(a.matchScore).toBe(0);
+function content(overrides: Partial<Content> = {}): Content {
+  return {
+    professionalSummary: "Summary",
+    headline: "Headline",
+    bulletRewrites: [],
+    skillsToAdd: [],
+    interviewQuestions: [],
+    careerTips: [],
+    ...overrides,
+  };
+}
+
+const signals = computeSignals(RESUME);
+const weights = CAREER_PROFILES.software.weights;
+const build = (a: Partial<Assessment> = {}, c: Partial<Content> | null = {}, hasJobDescription = false) =>
+  buildAnalysis({
+    assessment: assessment(a),
+    content: c === null ? null : content(c),
+    resumeText: RESUME,
+    signals,
+    weights,
+    hasJobDescription,
   });
 
-  it("rounds fractional scores to integers", () => {
-    const a = clampAnalysis(make({ overallScore: 73.6 }));
-    expect(a.overallScore).toBe(74);
-    expect(Number.isInteger(a.overallScore)).toBe(true);
-  });
-
-  it("never lets potentialScore drop below overallScore", () => {
-    expect(clampAnalysis(make({ overallScore: 80, potentialScore: 60 })).potentialScore).toBe(80);
-    expect(clampAnalysis(make({ overallScore: 70, potentialScore: 88 })).potentialScore).toBe(88);
-  });
-
-  it("clamps every section score", () => {
-    const a = clampAnalysis(
-      make({
-        sectionScores: {
-          experience: { score: 999, insight: "" },
-          skills: { score: -5, insight: "" },
-          impact: { score: 50.4, insight: "" },
-          clarity: { score: 88, insight: "" },
-          education: { score: NaN as unknown as number, insight: "" },
-        },
-      })
-    );
-    expect(a.sectionScores.experience.score).toBe(100);
-    expect(a.sectionScores.skills.score).toBe(0);
-    expect(a.sectionScores.impact.score).toBe(50);
-    expect(a.sectionScores.clarity.score).toBe(88);
-    expect(a.sectionScores.education.score).toBe(0); // NaN -> 0
-  });
-
-  it("preserves non-score fields", () => {
-    const a = clampAnalysis(make({ candidateName: "Bob", strengths: ["x", "y"] }));
-    expect(a.candidateName).toBe("Bob");
-    expect(a.strengths).toEqual(["x", "y"]);
-  });
-
-  it("normalizes recommendation priorities to High/Medium/Low", () => {
-    const a = clampAnalysis(
-      make({
-        recommendations: [
-          { priority: "critical", title: "t", detail: "d" },
-          { priority: "medium", title: "t", detail: "d" },
-          { priority: "whatever", title: "t", detail: "d" },
-        ],
-      })
-    );
-    expect(a.recommendations.map((r) => r.priority)).toEqual(["High", "Medium", "Medium"]);
+describe("clamp", () => {
+  it("rounds and bounds to 0-100, treating junk as 0", () => {
+    expect(clamp(150)).toBe(100);
+    expect(clamp(-5)).toBe(0);
+    expect(clamp(72.6)).toBe(73);
+    expect(clamp(NaN)).toBe(0);
+    expect(clamp("80")).toBe(80);
+    expect(clamp(undefined)).toBe(0);
   });
 });
 
-describe("normalizePriority", () => {
-  it("maps common variants", () => {
-    expect(normalizePriority("High")).toBe("High");
-    expect(normalizePriority("high")).toBe("High");
-    expect(normalizePriority("Critical")).toBe("High");
-    expect(normalizePriority("urgent")).toBe("High");
-    expect(normalizePriority("Low")).toBe("Low");
-    expect(normalizePriority("Medium")).toBe("Medium");
-    expect(normalizePriority("")).toBe("Medium");
-    expect(normalizePriority("something odd")).toBe("Medium");
+describe("buildAnalysis scoring", () => {
+  it("blends the model's overall with the weighted section average", () => {
+    // All sections 70 → weighted 70; AI overall 90 → 0.5*90 + 0.5*70 = 80.
+    const a = build({ overallScore: 90 });
+    expect(a.aiOverallScore).toBe(90);
+    expect(a.overallScore).toBe(80);
+  });
+
+  it("caps impact by the measured quantification signal", () => {
+    const weak = computeSignals("- Worked on things\n- Helped the team\n- Did tasks\n".repeat(5));
+    const a = buildAnalysis({
+      assessment: assessment({
+        sectionScores: { ...assessment().sectionScores, impact: { score: 95, insight: "great" } },
+      }),
+      content: null,
+      resumeText: RESUME,
+      signals: weak,
+      weights,
+      hasJobDescription: false,
+    });
+    expect(a.sectionScores.impact.score).toBe(impactCeiling(weak));
+    expect(a.sectionScores.impact.score).toBeLessThan(95);
+  });
+
+  it("never lets potential fall below overall or jump more than 25", () => {
+    expect(build({ overallScore: 70, potentialScore: 40 }).potentialScore).toBe(build({ overallScore: 70 }).overallScore);
+    const big = build({ overallScore: 70, potentialScore: 100 });
+    expect(big.potentialScore - big.overallScore).toBeLessThanOrEqual(25);
+  });
+
+  it("blends match with requirement coverage and verified keywords when a JD is given", () => {
+    const a = build(
+      {
+        matchScore: 100,
+        keywords: { matched: ["TypeScript"], missing: ["Go"] },
+        requirements: [
+          { requirement: "TypeScript", importance: "Must-have", status: "Met", evidence: "" },
+          { requirement: "Go", importance: "Must-have", status: "Missing", evidence: "" },
+        ],
+      },
+      {},
+      true
+    );
+    // 0.4*100 + 0.35*50 + 0.25*50 = 70
+    expect(a.matchScore).toBe(70);
+  });
+
+  it("drops requirements when there is no job description", () => {
+    const a = build({ requirements: [{ requirement: "X", importance: "Must-have", status: "Met", evidence: "" }] });
+    expect(a.requirements).toEqual([]);
+  });
+});
+
+describe("buildAnalysis verification", () => {
+  it("re-files hallucinated keyword matches as missing and vice versa", () => {
+    const a = build({ keywords: { matched: ["Kubernetes", "Terraform"], missing: ["React", "GraphQL"] } });
+    expect(a.keywords.matched).toEqual(expect.arrayContaining(["Kubernetes", "React"]));
+    expect(a.keywords.missing).toEqual(expect.arrayContaining(["Terraform", "GraphQL"]));
+    expect(a.keywords.coverage).toBe(0.5);
+  });
+
+  it("drops rewrites whose original bullet isn't in the resume", () => {
+    const a = build(
+      {},
+      {
+        bulletRewrites: [
+          { original: "Responsible for the payments service", improved: "Owned the payments service…", why: "" },
+          { original: "Invented a time machine for the CEO", improved: "Built…", why: "" },
+        ],
+      }
+    );
+    expect(a.bulletRewrites).toHaveLength(1);
+    expect(a.bulletRewrites[0]!.original).toMatch(/payments/);
+  });
+
+  it("returns empty content fields when the content pass failed", () => {
+    const a = build({}, null);
+    expect(a.bulletRewrites).toEqual([]);
+    expect(a.professionalSummary).toBe("");
+    expect(a.overallScore).toBeGreaterThan(0);
+  });
+
+  it("normalizes, sorts, and ids recommendations", () => {
+    const a = build({
+      recommendations: [
+        { priority: "low", category: "format", title: "Tidy", detail: "d" },
+        { priority: "critical", category: "Impact", title: "Quantify", detail: "d" },
+        { priority: "High", category: "", title: "", detail: "dropped (no title)" },
+      ],
+    });
+    expect(a.recommendations.map((r) => r.priority)).toEqual(["High", "Low"]);
+    expect(a.recommendations[0]!.category).toBe("Impact");
+    expect(a.recommendations[1]!.category).toBe("Format");
+    expect(new Set(a.recommendations.map((r) => r.id)).size).toBe(2);
+  });
+
+  it("dedupes list items and falls back to 'Candidate' for a blank name", () => {
+    const a = build({ candidateName: "  ", strengths: ["Good", "good", " ", "Other"] });
+    expect(a.candidateName).toBe("Candidate");
+    expect(a.strengths).toEqual(["Good", "Other"]);
+  });
+});
+
+describe("helpers", () => {
+  it("weights sections", () => {
+    const s = { score: 0 };
+    const sections = { experience: { score: 100 }, impact: s, skills: s, relevance: s, clarity: s, education: s };
+    expect(weightedScore(sections, weights)).toBeCloseTo(weights.experience * 100, 5);
+  });
+
+  it("counts must-haves double and partial as half", () => {
+    expect(
+      requirementCoverage([
+        { importance: "Must-have", status: "Met" },
+        { importance: "Nice-to-have", status: "Partial" },
+        { importance: "Nice-to-have", status: "Missing" },
+      ])
+    ).toBeCloseTo((2 + 0.5) / 4 * 100, 5);
+    expect(requirementCoverage([])).toBe(0);
+  });
+
+  it("lowers the clarity ceiling for buzzwords and pronouns", () => {
+    const clean = computeSignals(RESUME.replace("Responsible for", "Owned"));
+    const messy = computeSignals(RESUME + "\nI am a team player and results-driven self-starter. My passion is my work, I think.");
+    expect(clarityCeiling(messy)).toBeLessThan(clarityCeiling(clean));
+  });
+
+  it("normalizes enums", () => {
+    expect(normalizePriority("critical")).toBe("High");
+    expect(normalizePriority("medium")).toBe("Medium");
+    expect(normalizePriority("whatever")).toBe("Medium");
+    expect(normalizePriority("low")).toBe("Low");
+    expect(normalizeStatus("Met")).toBe("Met");
+    expect(normalizeStatus("partially")).toBe("Partial");
+    expect(normalizeStatus("no")).toBe("Missing");
+    expect(normalizeImportance("Nice-to-have")).toBe("Nice-to-have");
+    expect(normalizeImportance("preferred")).toBe("Nice-to-have");
+    expect(normalizeImportance("required")).toBe("Must-have");
   });
 });

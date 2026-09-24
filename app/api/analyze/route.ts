@@ -1,13 +1,30 @@
 import { NextResponse } from "next/server";
 import { generateObject } from "ai";
+import type { z } from "zod";
 
-import { model, MODEL_ID, isConfigured } from "@/lib/groq";
+import {
+  FALLBACK_MODELS,
+  FAST_MODEL_ID,
+  MODEL_ID,
+  groqOptions,
+  isConfigured,
+  isModelUnavailable,
+  modelFor,
+  retryAfterFromError,
+} from "@/lib/groq";
 import { extractText, ExtractionError, MAX_FILE_BYTES } from "@/lib/extract";
 import { MAX_FILE_MB, MAX_JD_CHARS, MAX_ROLE_CHARS, MAX_TEXT_CHARS } from "@/lib/constants";
 import { computeSignals, computeAtsChecks, appendKeywordCheck } from "@/lib/signals";
-import { analysisSchema } from "@/lib/schema";
-import { clampAnalysis } from "@/lib/analysis";
-import { ANALYSIS_SYSTEM, buildAnalysisPrompt } from "@/lib/prompt";
+import { assessmentSchema, contentSchema } from "@/lib/schema";
+import { buildAnalysis } from "@/lib/analysis";
+import {
+  CAREER_PROFILES,
+  adjustWeightsForSeniority,
+  detectCareerField,
+  detectSeniority,
+  isCareerFieldId,
+} from "@/lib/careers";
+import { ASSESSMENT_SYSTEM, CONTENT_SYSTEM, buildAssessmentPrompt, buildContentPrompt } from "@/lib/prompt";
 import { verdictFromScore } from "@/lib/format";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import type { AnalyzeResponse } from "@/lib/types";
@@ -16,15 +33,21 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 // Hard ceiling on each AI attempt so a slow or stuck model can never hang the
-// request until the platform kills the function at `maxDuration`. Two attempts ×
-// this budget stays comfortably under 60s, leaving headroom for extraction.
+// request until the platform kills the function at `maxDuration`. The two passes
+// run in parallel, so two attempts × this budget stays under 60s with headroom
+// for extraction.
 const AI_ATTEMPT_TIMEOUT_MS = 24_000;
 const AI_MAX_ATTEMPTS = 2;
-const AI_MAX_OUTPUT_TOKENS = 4000;
+// Longest provider-requested rate-limit wait we'll absorb inside one request.
+const RATE_LIMIT_MAX_WAIT_S = 28;
+// Includes the (low-effort) reasoning tokens of gpt-oss models.
+const ASSESSMENT_MAX_TOKENS = 5000;
+const CONTENT_MAX_TOKENS = 5000;
 
 export async function POST(req: Request) {
+  const started = Date.now();
   try {
-    const rl = await checkRateLimit(`analyze:${getClientIp(req)}`, { limit: 15, windowMs: 60_000 });
+    const rl = await checkRateLimit(`analyze:${getClientIp(req)}`, { limit: 10, windowMs: 60_000 });
     if (!rl.ok) {
       return NextResponse.json(
         { error: "Too many requests. Please wait a moment and try again." },
@@ -46,6 +69,9 @@ export async function POST(req: Request) {
     const pastedText = str(form.get("pastedText")).slice(0, MAX_TEXT_CHARS);
     const targetRole = str(form.get("targetRole")).slice(0, MAX_ROLE_CHARS);
     const jobDescription = str(form.get("jobDescription")).slice(0, MAX_JD_CHARS);
+    const fieldOverride = str(form.get("careerField"));
+    // Re-runs send the previously extracted text; keep the original file name for display.
+    const sourceName = str(form.get("sourceName")).slice(0, 200);
 
     let buffer: Buffer | undefined;
     let fileName: string | undefined;
@@ -58,23 +84,42 @@ export async function POST(req: Request) {
       fileName = f.name;
     }
 
-    // 1. Deterministic extraction + signals.
-    const { text: resumeText, fileName: resolvedName, source } = await extractText({
-      buffer,
-      fileName,
-      pastedText,
-    });
+    // 1. Deterministic layer: extraction, signals, career field, seniority.
+    const { text: resumeText, fileName: resolvedName, source } = await extractText({ buffer, fileName, pastedText });
     const signals = computeSignals(resumeText);
     let ats = computeAtsChecks(signals);
 
-    // 2. Qualitative analysis (AI, schema-constrained). Reasoning models
-    //    occasionally emit a non-conforming object, so retry a couple of times
-    //    before surfacing an error; scores/priority are normalized afterwards.
-    const prompt = buildAnalysisPrompt({ resumeText, signals, targetRole, jobDescription });
-    const analysis = clampAnalysis(await generateAnalysis(prompt));
+    const detected = detectCareerField({ resumeText, targetRole, jobDescription });
+    const userChose = fieldOverride && isCareerFieldId(fieldOverride) && fieldOverride !== "general";
+    const fieldId = userChose ? fieldOverride : detected.field;
+    const profile = CAREER_PROFILES[fieldId];
+    const seniority = detectSeniority({ resumeText, targetRole, yearsExperience: signals.timeline.yearsExperience });
+    const weights = adjustWeightsForSeniority(profile.weights, seniority);
 
-    // 3. Fold keyword coverage into ATS when a JD was provided.
-    const hasJobDescription = Boolean(jobDescription && jobDescription.trim());
+    // 2. AI layer: assessment + content in parallel. The assessment is required;
+    //    the content pass is best-effort so a failure there still returns scores.
+    const ctx = { resumeText, signals, profile, seniority, targetRole, jobDescription };
+    const [assessRes, contentRes] = await Promise.allSettled([
+      // Separate models = separate Groq per-model token budgets.
+      generate(MODEL_ID, assessmentSchema, ASSESSMENT_SYSTEM, buildAssessmentPrompt(ctx), ASSESSMENT_MAX_TOKENS, 0.2),
+      generate(FAST_MODEL_ID, contentSchema, CONTENT_SYSTEM, buildContentPrompt(ctx), CONTENT_MAX_TOKENS, 0.4),
+    ]);
+    if (assessRes.status === "rejected") throw assessRes.reason;
+    if (contentRes.status === "rejected") {
+      console.error("[analyze] content pass failed:", errLabel(contentRes.reason));
+    }
+
+    const hasJobDescription = Boolean(jobDescription);
+    const analysis = buildAnalysis({
+      assessment: assessRes.value,
+      content: contentRes.status === "fulfilled" ? contentRes.value : null,
+      resumeText,
+      signals,
+      weights,
+      hasJobDescription,
+    });
+
+    // 3. Fold verified keyword coverage into ATS when a JD was provided.
     if (hasJobDescription) {
       ats = appendKeywordCheck(ats, analysis.keywords.matched.length, analysis.keywords.missing.length);
     }
@@ -85,13 +130,25 @@ export async function POST(req: Request) {
       verdict: verdictFromScore(analysis.overallScore),
       signals,
       ats,
+      career: {
+        field: profile.id,
+        label: profile.label,
+        seniority,
+        confidence: userChose ? 1 : detected.confidence,
+        weights,
+        priorities: profile.priorities,
+        expectsPortfolio: profile.expectsPortfolio,
+      },
       hasJobDescription,
+      input: { targetRole, jobDescription },
       resumeText,
+      partial: contentRes.status === "rejected",
       meta: {
-        model: MODEL_ID,
-        fileName: resolvedName,
+        model: `${MODEL_ID} + ${FAST_MODEL_ID}`,
+        fileName: source === "paste" && sourceName ? sourceName : resolvedName,
         source,
         analyzedAt: new Date().toISOString(),
+        durationMs: Date.now() - started,
       },
     };
     return NextResponse.json(response);
@@ -100,35 +157,55 @@ export async function POST(req: Request) {
   }
 }
 
-/** Run the structured analysis under a strict time budget. Each attempt is
+/** Run one structured generation under a strict time budget. Each attempt is
  *  capped by an abort timeout so a slow model can't hang the request; retries
- *  only cover the rare schema drift. Fails fast on auth/rate/timeout errors. */
-async function generateAnalysis(prompt: string) {
+ *  only cover schema drift. If the model has been retired on Groq, the next
+ *  model in FALLBACK_MODELS is tried. Auth/rate/timeout errors fail fast. */
+async function generate<T extends z.ZodType>(
+  modelId: string,
+  schema: T,
+  system: string,
+  prompt: string,
+  maxOutputTokens: number,
+  temperature: number
+): Promise<z.infer<T>> {
+  const candidates = [modelId, ...FALLBACK_MODELS.filter((m) => m !== modelId)];
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= AI_MAX_ATTEMPTS; attempt++) {
-    try {
-      const { object } = await generateObject({
-        model,
-        schema: analysisSchema,
-        system: ANALYSIS_SYSTEM,
-        prompt,
-        temperature: 0.2, // lower = more consistent scores across runs
-        maxOutputTokens: AI_MAX_OUTPUT_TOKENS, // bound generation so a verbose resume can't run away
-        maxRetries: 1, // one transient-error retry, inside the per-attempt timeout below
-        abortSignal: AbortSignal.timeout(AI_ATTEMPT_TIMEOUT_MS),
-        // Constrained decoding (strict json_schema) makes Groq guarantee output
-        // that matches the schema, so we don't burn slow retries on the model
-        // drifting off-shape. The schema deliberately avoids the min/max/minItems
-        // keywords Groq's strict mode rejects (see lib/schema.ts).
-        providerOptions: { groq: { strictJsonSchema: true } },
-      });
-      return object;
-    } catch (e) {
-      lastErr = e;
-      // Retry only on schema drift (rare with strict decoding). Auth, rate-limit,
-      // and timeout errors fail fast so the user gets a clear message quickly
-      // instead of waiting out the whole budget.
-      if (attempt === AI_MAX_ATTEMPTS || !isSchemaError(e)) throw e;
+  let waitedForRateLimit = false;
+  for (const id of candidates) {
+    for (let attempt = 1; attempt <= AI_MAX_ATTEMPTS; attempt++) {
+      try {
+        const { object } = await generateObject({
+          model: modelFor(id),
+          schema,
+          system,
+          prompt,
+          temperature,
+          maxOutputTokens,
+          maxRetries: 0, // retries are handled here, where we can tell error kinds apart
+          abortSignal: AbortSignal.timeout(AI_ATTEMPT_TIMEOUT_MS),
+          // Constrained decoding (strict json_schema). The schemas avoid the
+          // min/max/minItems keywords Groq's strict mode rejects (lib/schema.ts).
+          providerOptions: groqOptions(id, { strictJsonSchema: true }),
+        });
+        return object as z.infer<T>;
+      } catch (e) {
+        lastErr = e;
+        // Free-tier token limits reset within a minute. If Groq asks for a short
+        // wait, wait once and retry rather than failing the whole analysis.
+        const wait = extractStatus(e) === 429 ? retryAfterFromError(e) : null;
+        if (wait !== null && wait <= RATE_LIMIT_MAX_WAIT_S && !waitedForRateLimit) {
+          waitedForRateLimit = true;
+          await new Promise((r) => setTimeout(r, wait * 1000 + 250));
+          attempt--; // this attempt didn't run — don't count it
+          continue;
+        }
+        if (isModelUnavailable(e)) {
+          console.error(`[analyze] model ${id} unavailable, trying fallback`);
+          break; // next candidate model
+        }
+        if (attempt === AI_MAX_ATTEMPTS || !isSchemaError(e)) throw e;
+      }
     }
   }
   throw lastErr;
@@ -138,8 +215,9 @@ function isSchemaError(e: unknown): boolean {
   if (!e || typeof e !== "object") return false;
   if (isAbortError(e)) return false; // a timeout is not schema drift — don't retry it
   const name = String((e as { name?: string }).name || "");
-  const msg = String((e as { message?: string }).message || "");
-  return /NoObjectGenerated/i.test(name) || /validate JSON|did not match schema/i.test(msg);
+  const o = e as { message?: string; responseBody?: string };
+  const msg = `${o.message ?? ""} ${o.responseBody ?? ""}`;
+  return /NoObjectGenerated/i.test(name) || /validate JSON|did not match schema|does not match the expected schema|json_validate_failed|parse/i.test(msg);
 }
 
 /** True for abort/timeout errors (AbortSignal.timeout throws a TimeoutError). */
@@ -154,24 +232,38 @@ function handleError(e: unknown) {
   if (e instanceof ExtractionError) {
     return err(e.message, e.status);
   }
-  // A model call that blew past its per-attempt budget was aborted — return a
-  // clear timeout instead of a generic 500 (or, before the abort existed, a hang).
   if (isAbortError(e)) {
-    return err(
-      "The analysis took too long and was stopped. Please try again — a shorter resume, or switching to the default (faster) model, usually fixes this.",
-      504
-    );
+    return err("The analysis took too long and was stopped. Please try again — a shorter resume usually helps.", 504);
   }
   // AI SDK wraps retryable provider errors in a RetryError (no top-level
   // statusCode) — dig into lastError so 401/429 are mapped correctly.
   const status = extractStatus(e);
   if (status === 401) return err("The AI API key was rejected. Check GROQ_API_KEY.", 502);
-  if (status === 429) return err("The AI service is rate-limited right now. Please wait a moment and retry.", 429);
+  if (status === 429) {
+    const wait = retryAfterFromError(e);
+    return NextResponse.json(
+      {
+        error: wait
+          ? `The AI usage limit was reached. Please try again in ${wait} seconds.`
+          : "The AI usage limit was reached. Please wait a minute and try again.",
+      },
+      { status: 429, headers: { "Retry-After": String(wait ?? 60) } }
+    );
+  }
   if (status === 413) return err("That request was too large. Please upload a smaller file.", 413);
+  if (status === 404 || isModelUnavailable(e)) {
+    console.error("[analyze] no available model:", errLabel(e));
+    return err("The configured AI model isn't available. Set GROQ_MODEL to a current Groq model (e.g. openai/gpt-oss-120b).", 502);
+  }
+  if (status === 400) {
+    // Usually a rare structured-output validation miss from the provider.
+    console.error("[analyze] provider rejected request:", errLabel(e));
+    return err("The AI returned an incomplete result. Please try again.", 502);
+  }
 
   // Log only a safe summary — the raw AI SDK error can serialize the provider
   // request body, which contains the candidate's resume text (PII).
-  console.error("[analyze] error:", e instanceof Error ? `${e.name}: ${e.message}` : String(e), "status=", status);
+  console.error("[analyze] error:", errLabel(e), "status=", status);
   return err("Something went wrong while analyzing. Please try again.", 500);
 }
 
@@ -182,6 +274,10 @@ function extractStatus(e: unknown): number {
   if (obj.lastError) return extractStatus(obj.lastError);
   if (Array.isArray(obj.errors) && obj.errors.length) return extractStatus(obj.errors[obj.errors.length - 1]);
   return 0;
+}
+
+function errLabel(e: unknown): string {
+  return e instanceof Error ? `${e.name}: ${e.message.slice(0, 300)}` : String(e).slice(0, 300);
 }
 
 function err(message: string, status: number) {

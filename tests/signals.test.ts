@@ -117,3 +117,73 @@ describe("appendKeywordCheck", () => {
     expect(Number.isFinite(ats.score)).toBe(true);
   });
 });
+
+describe("computeTimeline (via computeSignals)", () => {
+  const NOW = new Date(2026, 5, 15); // Jun 2026
+
+  it("merges overlapping roles, finds gaps, and ignores education dates", () => {
+    const text = [
+      "EXPERIENCE",
+      "Globex — Analyst | Jan 2018 – Dec 2019",
+      "Initech — Senior Analyst | Mar 2021 – Present",
+      "Side consulting 06/2021 - 12/2021",
+      "EDUCATION",
+      "B.A. Economics, State University, 2012 – 2016",
+    ].join("\n");
+    const t = computeSignals(text, NOW).timeline;
+    expect(t.roleCount).toBe(3);
+    expect(t.currentlyEmployed).toBe(true);
+    // 23 months (Jan 2018–Dec 2019) + 63 months (Mar 2021–Jun 2026)
+    expect(t.yearsExperience).toBeCloseTo((23 + 63) / 12, 1);
+    expect(t.gaps).toEqual([{ from: "Dec 2019", to: "Mar 2021", months: 15 }]);
+  });
+
+  it("flags a trailing gap when not currently employed", () => {
+    const t = computeSignals("Acme — Engineer, 2019 - 2023", NOW).timeline;
+    expect(t.currentlyEmployed).toBe(false);
+    expect(t.gaps.at(-1)?.to).toBe("Present");
+  });
+
+  it("counts short completed stints", () => {
+    const t = computeSignals("A: Jan 2022 - Jun 2022\nB: Jul 2022 - Mar 2023\nC: Apr 2023 - Present", NOW).timeline;
+    expect(t.shortStints).toBe(2);
+  });
+
+  it("returns zeros when no dates are present", () => {
+    const t = computeSignals("No dates here at all", NOW).timeline;
+    expect(t).toMatchObject({ yearsExperience: 0, roleCount: 0, gaps: [] });
+  });
+
+  it("rejects reversed and future ranges", () => {
+    expect(computeSignals("2023 - 2019", NOW).timeline.roleCount).toBe(0);
+    expect(computeSignals("Jan 2030 - Present", NOW).timeline.roleCount).toBe(0);
+  });
+});
+
+describe("writing signals", () => {
+  const text = [
+    "- Helped with onboarding new hires",
+    "- Worked on the billing system",
+    "- Led the redesign of checkout",
+    "- Led hiring for 3 roles",
+    "- Led weekly reviews",
+    "- The report was delivered on time and was praised by leadership",
+  ].join("\n");
+  const s = computeSignals(text);
+
+  it("detects weak phrases (most specific form only)", () => {
+    expect(s.weakPhrases).toContain("helped with");
+    expect(s.weakPhrases).not.toContain("helped");
+    expect(s.weakPhrases).toContain("worked on");
+  });
+
+  it("detects repeated opening verbs and passive voice", () => {
+    expect(s.repeatedVerbs).toEqual([{ verb: "Led", count: 3 }]);
+    expect(s.passiveVoiceCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("adds date and voice ATS checks", () => {
+    const ids = computeAtsChecks(s).checks.map((c) => c.id);
+    expect(ids).toEqual(expect.arrayContaining(["dates", "voice", "parseable"]));
+  });
+});

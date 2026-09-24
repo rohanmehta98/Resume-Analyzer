@@ -6,7 +6,7 @@ import {
   type UIMessage,
 } from "ai";
 
-import { model, isConfigured } from "@/lib/groq";
+import { FAST_MODEL_ID, fastModel, groqOptions, isConfigured } from "@/lib/groq";
 import { buildChatSystem } from "@/lib/prompt";
 import {
   MAX_CHAT_CONTEXT_CHARS,
@@ -21,7 +21,7 @@ export const maxDuration = 60;
 
 // Bound the answer length and wall-clock so a cheap request can't force a
 // maximum-cost generation or hang the function (see the analyze route).
-const CHAT_MAX_OUTPUT_TOKENS = 1500;
+const CHAT_MAX_OUTPUT_TOKENS = 2000; // includes low-effort reasoning tokens
 const CHAT_TIMEOUT_MS = 45_000;
 
 interface ChatBody {
@@ -66,7 +66,8 @@ export async function POST(req: Request) {
 
   try {
     const result = streamText({
-      model,
+      model: fastModel,
+      providerOptions: groqOptions(FAST_MODEL_ID),
       system: buildChatSystem(resumeText.slice(0, MAX_TEXT_CHARS), context?.slice(0, MAX_CHAT_CONTEXT_CHARS)),
       messages: await convertToModelMessages(recent),
       temperature: 0.5,
