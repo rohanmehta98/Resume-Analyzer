@@ -1,28 +1,34 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { Loader2, RotateCcw, AlertCircle, Download, Sparkles, ShieldCheck, Target, MessagesSquare } from "lucide-react";
+import { AlertCircle, FileCheck2, ListChecks, MessagesSquare, PenLine, Target } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UploadForm, type AnalyzeInput } from "@/components/upload-form";
-import { ResultsDashboard } from "@/components/results-dashboard";
-import { ChatPanel } from "@/components/chat-panel";
+import { AnalysisProgress } from "@/components/analysis-progress";
+import { RecentAnalyses } from "@/components/recent-analyses";
+import { Dashboard, type RerunInput } from "@/components/dashboard/dashboard";
+import { getHistorySnapshot, parseHistory, saveToHistory, subscribeHistory, type HistoryEntry } from "@/lib/history";
 import type { AnalyzeResponse, ErrorResponse } from "@/lib/types";
 
-const LOADING_STEPS = [
-  "Extracting text…",
-  "Scanning structure & keywords…",
-  "Scoring against the role…",
-  "Writing recommendations…",
+const FEATURES = [
+  { icon: FileCheck2, title: "Calibrated score", body: "Weighted for the candidate's field and seniority, with ATS checks." },
+  { icon: Target, title: "Job match", body: "Requirement-by-requirement fit and verified keyword coverage." },
+  { icon: ListChecks, title: "Action plan", body: "Prioritized fixes you can check off as you go." },
+  { icon: PenLine, title: "Rewrites", body: "Stronger bullets, summary, cover letter, and LinkedIn copy." },
+  { icon: MessagesSquare, title: "Interview prep", body: "Likely questions with answer guidance and a practice coach." },
 ];
 
 export function Analyzer() {
-  const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AnalyzeResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   const [configured, setConfigured] = useState(true);
-  const [step, setStep] = useState(0);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [tab, setTab] = useState("overview");
+
+  const historyRaw = useSyncExternalStore(subscribeHistory, getHistorySnapshot, () => "");
+  const history = useMemo(() => parseHistory(historyRaw), [historyRaw]);
 
   useEffect(() => {
     fetch("/api/health")
@@ -31,14 +37,14 @@ export function Analyzer() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!loading) return;
-    // step is reset to 0 in handleAnalyze (an event handler) before loading flips.
-    timer.current = setInterval(() => setStep((s) => Math.min(s + 1, LOADING_STEPS.length - 1)), 1800);
-    return () => {
-      if (timer.current) clearInterval(timer.current);
-    };
-  }, [loading]);
+  async function request(fd: FormData): Promise<AnalyzeResponse> {
+    const res = await fetch("/api/analyze", { method: "POST", body: fd });
+    const payload = (await res.json().catch(() => ({}))) as AnalyzeResponse | ErrorResponse;
+    if (!res.ok || !("ok" in payload)) {
+      throw new Error(("error" in payload && payload.error) || "Analysis failed. Please try again.");
+    }
+    return payload;
+  }
 
   async function handleAnalyze(input: AnalyzeInput) {
     const fd = new FormData();
@@ -48,24 +54,55 @@ export function Analyzer() {
     } else {
       fd.append("pastedText", input.pastedText);
     }
-    if (input.targetRole) fd.append("targetRole", input.targetRole);
-    if (input.jobDescription) fd.append("jobDescription", input.jobDescription);
+    if (input.targetRole.trim()) fd.append("targetRole", input.targetRole.trim());
+    if (input.jobDescription.trim()) fd.append("jobDescription", input.jobDescription.trim());
+    if (input.careerField && input.careerField !== "auto") fd.append("careerField", input.careerField);
 
-    setStep(0);
     setLoading(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
     try {
-      const res = await fetch("/api/analyze", { method: "POST", body: fd });
-      const payload = (await res.json().catch(() => ({}))) as AnalyzeResponse | ErrorResponse;
-      if (!res.ok || !("ok" in payload)) {
-        throw new Error(("error" in payload && payload.error) || "Analysis failed. Please try again.");
-      }
-      setData(payload);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      const result = await request(fd);
+      saveToHistory(result);
+      setTab("overview");
+      setData(result);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Analysis failed. Please try again.");
     } finally {
       setLoading(false);
     }
+  }
+
+  /** Re-analyze the same resume text (e.g. with a job description added). */
+  async function handleRerun(input: RerunInput) {
+    if (!data || rerunning) return;
+    const fd = new FormData();
+    fd.append("pastedText", data.resumeText);
+    fd.append("sourceName", data.meta.fileName);
+    if (input.targetRole) fd.append("targetRole", input.targetRole);
+    if (input.jobDescription) fd.append("jobDescription", input.jobDescription);
+    // Keep a field the user explicitly chose; otherwise let detection re-run
+    // (a new job description may point to a different field).
+    if (data.career.confidence === 1) fd.append("careerField", data.career.field);
+
+    setRerunning(true);
+    const toastId = toast.loading(input.jobDescription ? "Matching against the job description…" : "Re-running analysis…");
+    try {
+      const result = await request(fd);
+      saveToHistory(result);
+      setData(result);
+      toast.success("Analysis updated", { id: toastId });
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Analysis failed. Please try again.", { id: toastId });
+    } finally {
+      setRerunning(false);
+    }
+  }
+
+  function openFromHistory(entry: HistoryEntry) {
+    setTab("overview");
+    setData(entry.data);
+    window.scrollTo({ top: 0 });
   }
 
   function reset() {
@@ -76,96 +113,67 @@ export function Analyzer() {
   return (
     <div className="w-full">
       {!configured && (
-        <div className="mx-auto mb-6 flex max-w-2xl items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
-          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+        <div className="mx-auto mb-6 flex max-w-3xl items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-warning-strong" />
           <p>
-            <span className="font-semibold">Setup needed:</span> the AI service isn&apos;t configured. Add a free{" "}
-            <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">GROQ_API_KEY</code> to your{" "}
-            <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">.env.local</code> file and restart.
+            <span className="font-semibold">Setup needed:</span> the AI service isn&apos;t configured. Add a{" "}
+            <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">GROQ_API_KEY</code> to{" "}
+            <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">.env.local</code> and restart the server.
           </p>
         </div>
       )}
 
-      {!data ? (
-        <div className="relative">
-          {/* decorative glow */}
-          <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-28 -z-10 flex justify-center overflow-hidden">
-            <div className="h-72 w-[46rem] max-w-[92vw] rounded-full bg-primary/20 blur-[100px] dark:bg-primary/25" />
-          </div>
-
-          <div className="mx-auto max-w-3xl">
-            <div className="mb-8 text-center duration-700 animate-in fade-in-0 slide-in-from-bottom-3">
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border bg-card/60 px-3.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur">
-                <Sparkles className="h-3.5 w-3.5 text-primary" />
-                AI-powered resume analysis
-                <span aria-hidden className="text-border">·</span>
-                Free &amp; private
-              </div>
-              <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-5xl">
-                Let&apos;s analyze the next candidate.
-              </h1>
-              <p className="mx-auto mt-4 max-w-xl text-pretty text-base text-muted-foreground sm:text-lg">
-                Upload a resume for an instant, recruiter-grade breakdown — ATS score, keyword match, section grades, and
-                the exact rewrites that get interviews.
+      {data ? (
+        <Dashboard
+          key={data.meta.analyzedAt}
+          data={data}
+          history={history}
+          onNew={reset}
+          onRerun={handleRerun}
+          rerunning={rerunning}
+          tab={tab}
+          onTabChange={setTab}
+        />
+      ) : (
+        <>
+          {loading && <AnalysisProgress />}
+          {/* Kept mounted while loading so a failed request doesn't lose the user's input. */}
+          <div className={loading ? "hidden" : "duration-500 animate-in fade-in-0"}>
+            <div className="mb-8 max-w-2xl">
+              <h1 className="text-balance text-3xl font-bold tracking-tight sm:text-4xl">Resume analysis for any career</h1>
+              <p className="mt-3 text-pretty text-base text-muted-foreground">
+                Scores, job match, rewrites, and interview prep — judged by the standards of the candidate&apos;s own field
+                and level, from nursing to engineering to sales.
               </p>
             </div>
-
-            <div className="duration-700 animate-in fade-in-0 slide-in-from-bottom-4 [animation-delay:120ms] [animation-fill-mode:both]">
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
               <UploadForm loading={loading} onAnalyze={handleAnalyze} />
-            </div>
-
-            <div className="mt-8 grid grid-cols-2 gap-3 duration-700 animate-in fade-in-0 [animation-delay:260ms] [animation-fill-mode:both] sm:grid-cols-4">
-              {[
-                { icon: ShieldCheck, label: "ATS score" },
-                { icon: Target, label: "Keyword match" },
-                { icon: Sparkles, label: "Bullet rewrites" },
-                { icon: MessagesSquare, label: "AI chat coach" },
-              ].map((f) => (
-                <div
-                  key={f.label}
-                  className="flex flex-col items-center gap-2 rounded-xl border bg-card/50 p-4 text-center transition-colors hover:border-primary/40 hover:bg-accent/40"
-                >
-                  <f.icon className="h-5 w-5 text-primary" />
-                  <span className="text-xs font-medium text-muted-foreground">{f.label}</span>
-                </div>
-              ))}
-            </div>
-
-            <p className="mt-6 text-center text-xs text-muted-foreground">
-              No sign-up · Processed in memory · Nothing is stored
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-6 duration-500 animate-in fade-in-0">
-          <div className="flex items-center justify-between print:hidden">
-            <p className="text-sm text-muted-foreground">
-              Analysis of <span className="font-medium text-foreground">{data.meta.fileName}</span>
-            </p>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => window.print()}>
-                <Download className="mr-2 h-3.5 w-3.5" /> Download PDF
-              </Button>
-              <Button variant="outline" size="sm" onClick={reset}>
-                <RotateCcw className="mr-2 h-3.5 w-3.5" /> New analysis
-              </Button>
+              <div className="space-y-6">
+                {history.length > 0 && <RecentAnalyses entries={history} onOpen={openFromHistory} />}
+                <Card size="sm">
+                  <CardHeader>
+                    <CardTitle className="text-base">What&apos;s included</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="space-y-3.5">
+                      {FEATURES.map((f) => (
+                        <li key={f.title} className="flex gap-3">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <f.icon className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium">{f.title}</span>
+                            <span className="block text-xs text-muted-foreground">{f.body}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              </div>
             </div>
           </div>
-          <ResultsDashboard data={data} />
-          <ChatPanel key={data.meta.analyzedAt} resumeText={data.resumeText} weaknesses={data.analysis.weaknesses} />
-        </div>
-      )}
-
-      {loading && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-background/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4 rounded-xl border bg-card p-8 shadow-xl">
-            <Loader2 className="h-10 w-10 animate-spin text-primary" />
-            <div className="text-center">
-              <p className="font-semibold">Analyzing your resume</p>
-              <p className="mt-1 text-sm text-muted-foreground">{LOADING_STEPS[step]}</p>
-            </div>
-          </div>
-        </div>
+        </>
       )}
     </div>
   );

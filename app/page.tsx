@@ -24,13 +24,13 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-10">
         <Analyzer />
       </main>
 
       <footer className="border-t py-6 print:hidden">
         <div className="mx-auto w-full max-w-6xl px-4 text-center text-sm text-muted-foreground sm:px-6">
-          ResumeIQ · Your resume is processed in memory and never stored.
+          Resumes are processed in memory and never stored on our servers. Analysis history stays in your browser.
         </div>
       </footer>
     </>

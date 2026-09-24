@@ -1,39 +1,80 @@
 # ResumeIQ — AI Resume Analyzer
 
-A modern, production-ready resume analyzer built with **Next.js 16 (App Router)**, **Tailwind v4 + shadcn/ui**, and the **Vercel AI SDK v7** running on **Groq**.
+A resume analyzer that works for **any career**: it judges each resume by the standards of the candidate's own field and seniority (a nurse on licensure and patient load, a salesperson on quota attainment, an engineer on systems and scale), not a one-size-fits-all rubric.
 
-Upload a resume (PDF/DOCX/TXT) or paste text to get:
+Built with **Next.js 16 (App Router)**, **React 19**, **Tailwind v4 + shadcn/ui**, and the **Vercel AI SDK v7** on **Groq**.
 
-- **Overall + ATS + job-match scores** with a section-by-section breakdown
-- **Potential score** — the score you'd reach after applying the top fixes
-- **Keyword matching** against a pasted job description
-- **Specific bullet rewrites** (before → after) and prioritized recommendations
-- **Likely interview questions** and recruiter **red flags**
-- A **streaming chat assistant** grounded in the actual resume text
-- **Download the report as a PDF** (print-optimized)
-- **"Try a sample"** one-click demo — no resume needed
+## Features
 
-Files are processed **in memory only** — nothing is stored.
+Upload a resume (PDF, DOCX, TXT) or paste text, optionally with a target role and job description.
+
+- **Calibrated overall score**, weighted by career field and seniority, with a "how it's scored" breakdown
+- **Six section scores** — experience, impact, skills, role relevance, clarity, education & credentials
+- **Job match** — requirement-by-requirement status (met / partial / missing, with evidence) and verified keyword coverage
+- **ATS checks** — parseability, contact info, standard sections, dated history, length, bullets, quantification, voice
+- **Career timeline** — total experience, average tenure, employment gaps, and short stints parsed from dates
+- **Action plan** — prioritized fixes you can check off, with progress saved in the browser
+- **Improve** — rewritten headline and summary, bullet rewrites (with `[X]` placeholders instead of invented numbers), and writing-quality metrics
+- **Interview prep** — likely questions with what they probe and how to answer from your own experience
+- **Writing tools** — streamed cover letter, LinkedIn headline/About, job-tailored bullets, and recruiter outreach
+- **Career coach chat** grounded in the resume, including mock-interview practice
+- **History** of past analyses (stored only in your browser) with score changes between runs
+- **PDF export** of the full report, light/dark themes, responsive layout
+
+Resumes are processed in memory and never stored on the server.
+
+## Supported career fields
+
+Auto-detected (or chosen manually): Software Engineering · Data & Analytics · Product Management · Design & Creative · Marketing & Communications · Sales & Business Development · Finance & Accounting · Healthcare & Medical · Education & Training · Legal · Engineering (Mech/Civil/Electrical) · Operations & Supply Chain · HR & Recruiting · Customer Service & Hospitality · Skilled Trades · Research & Academia — with a general rubric as fallback.
+
+Seniority levels: Student/Entry · Early career · Mid-level · Senior · Lead/Manager · Executive.
 
 ## How it works
 
-Two layers keep results trustworthy, not just "AI vibes":
+The analysis combines deterministic code with AI, and the code checks the AI.
 
-1. **Deterministic layer** ([lib/signals.ts](lib/signals.ts), [lib/extract.ts](lib/extract.ts)) — plain code extracts the text (PDF via `unpdf`, DOCX via `mammoth`) and computes reproducible signals: contact info, sections present, word count, bullet & quantification ratios, action-verb usage, buzzwords, and ATS checks.
-2. **AI layer** ([lib/prompt.ts](lib/prompt.ts) + Groq) — the model does the qualitative judgment (scoring, strengths/weaknesses, keyword analysis, rewrites) via `generateObject` with a **Zod schema** ([lib/schema.ts](lib/schema.ts)), so the output shape is guaranteed. Section scores are explicitly bound to the deterministic signals, and the verdict is derived from the score in code so they can never disagree.
+1. **Deterministic layer** — plain, unit-tested code
+   - [lib/extract.ts](lib/extract.ts): text extraction (`unpdf`, `mammoth`) with zip-bomb and size guards
+   - [lib/signals.ts](lib/signals.ts): contact info, sections, quantification and action-verb ratios, weak phrases, buzzwords, passive voice, repeated verbs, experience timeline, ATS checks
+   - [lib/careers.ts](lib/careers.ts): career-field and seniority detection, field-specific priorities, metrics, credentials, and section weights
+2. **AI layer** — two structured passes run in parallel ([lib/schema.ts](lib/schema.ts), [lib/prompt.ts](lib/prompt.ts))
+   - *Assessment*: scores, strengths, gaps, keywords, JD requirements, recommendations
+   - *Content*: summary, headline, bullet rewrites, skills gap, interview questions, career tips
+   - If the content pass fails, scores are still returned.
+3. **Verification & calibration** — [lib/analysis.ts](lib/analysis.ts), [lib/keywords.ts](lib/keywords.ts)
+   - Keywords the AI calls "matched" must actually appear in the resume (with alias handling, e.g. Node.js/NodeJS, CI/CD)
+   - Bullet rewrites are dropped if their "original" isn't really in the resume
+   - Impact and clarity scores are capped by the measured signals
+   - Overall = 50% model judgment + 50% field-weighted section average
+   - Job match blends the model's estimate with requirement coverage (must-haves count double) and verified keyword coverage
 
 ## Quick start
 
 ```bash
 npm install
 
-# Configure your (free) Groq key
 cp .env.example .env.local
-# then edit .env.local and paste your key from https://console.groq.com/keys
+# edit .env.local and add your Groq key from https://console.groq.com/keys
 
 npm run dev
 # → http://localhost:3000
 ```
+
+Click **Try a sample** to see a full analysis without uploading anything.
+
+## Environment variables
+
+| Variable | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `GROQ_API_KEY` | yes | — | https://console.groq.com/keys |
+| `GROQ_MODEL` | no | `openai/gpt-oss-120b` | Scoring pass and writing tools. Must support structured output (json_schema). |
+| `GROQ_FAST_MODEL` | no | `openai/gpt-oss-20b` | Rewrites/interview-prep pass and chat. |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | — | Enables durable, cross-instance rate limiting (Vercel KV names also accepted). |
+| `NEXT_PUBLIC_SITE_URL` | no | Vercel production URL | Canonical/OG URLs. |
+
+**Why two models?** Groq rate limits are per model. The free tier allows roughly 8k tokens/minute on `gpt-oss-120b`, and one analysis uses about 9k across both passes. Splitting the passes across two models gives each its own budget. On the free tier expect about two analyses per minute; if Groq asks for a short wait, the server waits and retries automatically. If a configured model is retired on Groq, the app falls back to the next available one.
+
+Never commit `.env.local` — it is git-ignored.
 
 ## Scripts
 
@@ -42,69 +83,54 @@ npm run dev        # dev server
 npm run build      # production build
 npm run typecheck  # tsc --noEmit
 npm run lint       # eslint
-npm test           # vitest (deterministic core: signals, extract, format, clamp, rate-limit)
+npm test           # vitest
 ```
-
-## Environment variables
-
-| Variable       | Required | Default                             | Notes |
-| -------------- | -------- | ----------------------------------- | ----- |
-| `GROQ_API_KEY` | yes      | —                                   | Free key: https://console.groq.com/keys |
-| `GROQ_MODEL`   | no       | `meta-llama/llama-4-scout-17b-16e-instruct` | Fast (~2.5s) + reliable. **Must support structured output (json_schema).** For deeper (but slower) analysis try `openai/gpt-oss-120b`. Do not use `llama-3.3-70b-versatile`. |
 
 ## Project structure
 
 ```
 app/
-  page.tsx              Landing + results (header/footer shell)
-  layout.tsx            Theme provider, tooltip provider, toaster, fonts
+  page.tsx                 App shell (header, footer)
   api/
-    analyze/route.ts    POST — extract, compute signals, generateObject
-    chat/route.ts       POST — streaming chat (streamText) grounded in the resume
-    health/route.ts     GET  — config/status probe
+    analyze/route.ts       POST — extract, signals, career detection, two parallel AI passes, verification
+    generate/route.ts      POST — streamed cover letter / LinkedIn / tailored bullets / outreach
+    chat/route.ts          POST — streamed career-coach chat grounded in the resume
+    health/route.ts        GET  — config probe
 components/
-  analyzer.tsx          Client orchestrator (input → loading → results)
-  upload-form.tsx       Dropzone / paste tabs + role + job description
-  results-dashboard.tsx Scores, sections, keywords, rewrites, ATS, stats
-  chat-panel.tsx        useChat streaming assistant
-  score-ring.tsx        SVG donut
-  ui/                   shadcn/ui components
+  analyzer.tsx             Input → progress → dashboard orchestration, history
+  upload-form.tsx          Upload/paste, target role, career field, job description
+  analysis-progress.tsx    Step-by-step progress view
+  recent-analyses.tsx      Browser-local history list
+  chat-panel.tsx           Career coach chat
+  markdown.tsx             Safe markdown renderer for model output
+  dashboard/               Score summary + Overview, Job match, Improve, Interview prep, Writing tools tabs
+  ui/                      shadcn/ui components
 lib/
-  groq.ts               Model config
-  schema.ts             Zod schema for the AI analysis
-  analysis.ts           clampAnalysis — score clamping/normalization
-  signals.ts            Deterministic signal + ATS computation
-  extract.ts            PDF/DOCX/TXT text extraction
-  prompt.ts             Prompt construction
-  format.ts             Score → color/verdict helpers
-  rate-limit.ts         In-memory per-IP rate limiter
-  constants.ts          Shared size/length limits
-tests/                  Vitest unit tests for the deterministic core
+  careers.ts               Career fields, seniority, rubrics, weights
+  signals.ts               Deterministic signals, timeline, ATS checks
+  keywords.ts              Keyword and quote verification
+  analysis.ts              Merge, verify, calibrate
+  schema.ts                Zod schemas for both AI passes
+  prompt.ts                Prompts (analysis, chat, writing tools)
+  groq.ts                  Model routing, fallbacks, rate-limit parsing
+  extract.ts               PDF/DOCX/TXT extraction
+  history.ts               Browser-local history and action-plan state
+  rate-limit.ts            Per-IP rate limiting (in-memory or Upstash)
+tests/                     Vitest suites for the deterministic and calibration logic
 ```
 
-## Deploy to Vercel
+## Deploying to Vercel
 
-Push to a Git repo, import it in Vercel, and set `GROQ_API_KEY` (and optionally `GROQ_MODEL`) in the project's Environment Variables. The App Router API routes deploy as functions automatically.
+Import the repo in Vercel and set `GROQ_API_KEY` in the project's Environment Variables (`.env.local` is never deployed). CI runs typecheck, lint, tests, and build on every push to `main`.
 
-```bash
-vercel            # preview
-vercel --prod     # production
-```
+Before opening it to real users:
 
-## Production hardening (before a real client)
+- Provision Upstash Redis (Vercel Marketplace) for durable rate limiting — otherwise limits are per-instance and best-effort.
+- Set a spend cap on your Groq account; the AI routes are public.
+- Optionally add a Vercel Firewall rate rule or BotID on `/api/analyze`, `/api/generate`, and `/api/chat`.
 
-Per-request abuse is already handled: server-side length caps on the file,
-pasted text, job description, and chat context; scores clamped in code; input
-bounded so signal computation can't be a CPU DoS; and a **best-effort in-memory
-rate limiter** ([lib/rate-limit.ts](lib/rate-limit.ts)) on `/api/analyze`
-(15/min/IP) and `/api/chat` (30/min/IP).
-
-Two things to upgrade when this goes in front of real users, since the AI routes
-are public and unauthenticated:
-
-- **Shared rate limiting** — the in-memory limiter is per-function-instance and resets on cold start. For reliable limits across instances use [Vercel Firewall](https://vercel.com/docs/security/vercel-firewall) rate rules or `@upstash/ratelimit` (drop-in replacement for `rateLimit()`).
-- **Auth** — gate the routes behind a session/API key once you have accounts.
+Security headers (CSP, HSTS, frame-deny), input size caps, ReDoS-safe parsing, DOCX zip-bomb protection, prompt-injection guards, and PII-safe error logging are already in place.
 
 ## Swapping the AI provider
 
-The app talks to Groq through the AI SDK. To move to another provider (OpenAI, Anthropic, Vercel AI Gateway, a paid tier), change the model in [lib/groq.ts](lib/groq.ts) — the rest of the app is provider-agnostic.
+All model access goes through the AI SDK in [lib/groq.ts](lib/groq.ts). To use another provider or a paid tier, change the models there; the rest of the app is provider-agnostic.
